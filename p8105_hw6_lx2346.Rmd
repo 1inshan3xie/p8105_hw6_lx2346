@@ -74,7 +74,7 @@ weather_result |>
   labs(title = "Bootstrap Distribution of log(β0 * β1)", x = "log(β0 * β1)")
 ```
 \
-**Comment**:It can be observed that the R-squared values are concentrated around 0.9, approximately forming a bell shape. The distribution of log(β₀ * β₁) ranges from 1.90 to 2.10, with a peak around 2.01, also exhibiting a bell-shaped pattern.
+**Comment**: It can be observed that the R-squared values are concentrated around 0.9, approximately forming a bell shape. The distribution of log(β₀ * β₁) ranges from 1.90 to 2.10, with a peak around 2.01, also exhibiting a bell-shaped pattern.
 
 ## Identify the 2.5% and 97.5% quantiles to provide a 95% confidence interval for 𝑟̂2 and log(𝛽̂0∗𝛽̂1).
 ```{r}
@@ -185,4 +185,103 @@ glm_model |>
 \
 **Comment**: The probability of solving homicide cases differs between male and female victims across different cities. In most cities, the probability of solving homicide cases for male victims is lower than that for female victims. However, in only six cities—Albuquerque, Atlanta, Fresno, Nashville, Stockton, and Richmond—the probability of solving homicide cases for male victims is higher than that for female victims.
 
+## Problem 3
+### Load and clean the data for regression analysis
+```{r}
+birthweight = read_csv("./data/birthweight.csv", na = c(".", "", "NA")) |>
+  mutate(
+    babysex = factor(babysex, levels = c(1, 2), labels = c("Male", "Female")),
+    frace = factor(frace, levels = c(1, 2, 3, 4, 8, 9), labels = c("White", "Black", "Asian", "Puerto Rican", "Other", "Unknown")),
+    mrace = factor(mrace, levels = c(1, 2, 3, 4, 8), labels = c("White", "Black", "Asian", "Puerto Rican", "Other")),
+    malform = factor(malform, levels = c(0, 1), labels = c("Absent", "Present"))
+  )
 
+colSums(is.na(birthweight))
+```
+\
+The result shows there is no missing data in the dataset!
+
+### Propose a regression model for birthweight.
+
+In this analysis, I chose stepwise regression to identify the predictors of birthweight. Stepwise regression is a data-driven approach that iteratively evaluates the significance of variables, ensuring that only those with substantial predictive power are included in the final model. 
+
+```{r}
+full_model = lm(bwt ~ ., data = birthweight)
+stepwise_model = step(full_model, direction = "both")
+summary(stepwise_model)
+```
+\
+Accordeing to the result of stepwise regression, the model i choose is lm(formula = bwt ~ babysex + bhead + blength + delwt + fincome + gaweeks + mheight + mrace + parity + ppwt + smoken). It has the adjusted R-squared being 0.7173, the standard error of residual is 272.3
+```{r}
+my_model = lm(bwt ~ babysex + bhead + blength + delwt + fincome + gaweeks + mheight + mrace + parity + ppwt + smoken, data = birthweight)
+summary(my_model)
+```
+### Show a plot of model residuals against fitted values
+```{r}
+birthweight = birthweight |>
+  add_predictions(my_model, var = "pred_my_model") |>
+  add_residuals(my_model, var = "resi_my_model")
+
+birthweight |>
+  ggplot(aes(x = pred_my_model, y = resi_my_model)) +
+  geom_point(size = .8, alpha = .3) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  labs(
+    title = "Residuals vs Fitted Values",
+    x = "Fitted Values",
+    y = "Residuals") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+### Construct the other two models
+\
+1. Use CV to select models
+```{r}
+cv_df =
+  crossv_mc(birthweight, 100) |> 
+  mutate(
+    train = map(train, as_tibble),
+    test = map(test, as_tibble))
+```
+
+2. Apply to three different models and extract RMSE
+```{r}
+cv_res_df = cv_df |>
+  
+  mutate(
+    my_mod  = map(train, \(x) lm(bwt ~ babysex + bhead + blength + delwt + fincome + gaweeks + mheight + mrace + parity + ppwt + smoken, data = x)),
+    control_mod_1 = map(train, \(x) lm(bwt ~ blength + gaweeks, data = x)),
+    control_mod_2 = map(train, \(x) lm(bwt ~ bhead * blength * babysex, data = x))) |> 
+  
+  mutate(
+    rmse_my_mod = map2_dbl(my_mod, test, \(mod, df) rmse(model = mod, data = df)),
+    rmse_control_mod_1 = map2_dbl(control_mod_1, test, \(mod, df) rmse(model = mod, data = df)),
+    rmse_control_mod_2 = map2_dbl(control_mod_2, test, \(mod, df) rmse(model = mod, data = df))) 
+
+```
+3. Make plots to make comparisions across models.
+```{r}
+cv_res_df |> 
+  select(starts_with("rmse")) |> 
+  pivot_longer(
+    everything(),
+    names_to = "model", 
+    values_to = "rmse",
+    names_prefix = "rmse_") |> 
+  mutate(model = fct_inorder(model)) |> 
+  ggplot(aes(x = model, y = rmse, fill = model)) + 
+  geom_violin(alpha = 0.5) +
+  scale_fill_manual(values = c("my_mod" = "#4C9BCF", "control_mod_1" = "#F1A340", "control_mod_2" = "#E49A8E")) +
+  stat_summary(fun = "median", geom = "point", color = "black", size = 2, shape = 18) + 
+  labs(
+    title = "RMSE Distribution by Model Type",
+    x = "Model Type",
+    y = "Root Mean Squared Error (RMSE)"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+  
+```
+\
+**Comment**: Based on the RMSE violin plot, it can be observed that my_mod has the smallest RMSE, while control_mod_1 has the largest RMSE. This indicates that, in terms of prediction performance, my_mod performs better than control_mod_2, which in turn performs better than control_mod_1.
